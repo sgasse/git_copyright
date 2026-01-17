@@ -1,93 +1,95 @@
-//! Check and update copyright of file.
+//! File operations
 
-use crate::CError;
-use futures::join;
-use futures::Future;
-use regex::Regex;
-use std::io::{BufRead, BufReader};
+use std::fs;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::Path;
 use std::sync::Arc;
-use std::{path::Path, path::PathBuf};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-pub async fn read_write_copyright(
-    filepath: PathBuf,
-    regex: Arc<Regex>,
-    years_fut: impl Future<Output = String>,
-    copyright_line: impl Future<Output = String>,
-) -> Result<(), CError> {
-    let (years, copyright_line) = join!(years_fut, copyright_line);
+use glob::Pattern;
+use regex::Regex;
 
-    // This could be re-written to read the file asynchronously until EOF or the first n
-    // newlines are found.
-    let file = std::fs::File::open(&filepath)
-        .map_err(|_| CError::ReadError(filepath.display().to_string()))?;
-    let file_header = BufReader::new(file).lines().take(3);
+use crate::error::Error;
 
-    for (line_nr, line_) in file_header.enumerate() {
-        if let Ok(line_) = line_ {
-            if let Some(cap) = regex.captures_iter(&line_).take(1).next() {
-                if years == &cap[1] {
-                    log::debug!(
-                        "File {} has correct copyright with years {}",
-                        filepath.display(),
-                        years
-                    );
-                    return Ok(());
-                } else {
-                    println!(
-                        "File {} has copyright with year(s) {} on line {} but should have {}",
-                        filepath.display(),
-                        &cap[1],
-                        line_nr,
-                        years
-                    );
-                    return write_copyright(&filepath, &copyright_line, Some(line_nr)).await;
-                }
-            }
-        }
-    }
-
-    println!(
-        "File {} has no copyright but should have {}",
-        filepath.display(),
-        years
-    );
-    write_copyright(&filepath, &copyright_line, None).await
+/// Filter files based on glob patterns for files and directories to ignore
+pub(crate) fn filter_files(
+    glob_patterns: &[Pattern],
+    files: impl IntoIterator<Item = String>,
+) -> impl IntoIterator<Item = String> {
+    files
+        .into_iter()
+        .filter(|filepath| !glob_patterns.iter().any(|p| p.matches(filepath)))
 }
 
-async fn write_copyright(
+/// Read the copyright years from an existing file
+pub(crate) fn read_copyright_years(
     filepath: &Path,
-    copyright_line: &str,
-    line_nr: Option<usize>,
-) -> Result<(), CError> {
-    let mut file = tokio::fs::File::open(filepath)
-        .await
-        .map_err(|_| CError::ReadError(filepath.display().to_string()))?;
-    let mut data = Vec::new();
-    file.read_to_end(&mut data).await?;
-    let mut data: Vec<&str> = std::str::from_utf8(&data)?.split("\n").collect();
+    copyright_re: &Arc<Regex>,
+) -> Option<(usize, String)> {
+    let file = fs::File::open(filepath)
+        .inspect_err(|e| eprintln!("Failed to read {}: {e}", filepath.display()))
+        .ok()?;
+    let file_header = BufReader::new(file).lines().take(3);
 
-    match line_nr {
-        Some(line_nr) => {
-            data[line_nr] = &copyright_line;
-        }
-        None => {
-            if data.len() >= 1 && data[0].starts_with("#!") {
-                // Insert copyright on the second line for shell scripts
-                // that might have a shebang line
-                data.insert(1, copyright_line);
-            } else {
-                data.insert(0, copyright_line);
-            }
+    for (line_idx, line) in file_header.enumerate() {
+        if let Ok(line) = line
+            && let Some(cap) = copyright_re.captures_iter(&line).take(1).next()
+        {
+            return Some((line_idx, cap[1].to_owned()));
         }
     }
 
-    let mut file = tokio::fs::File::create(filepath)
-        .await
-        .map_err(|_| CError::WriteError(filepath.display().to_string()))?;
-    file.write_all(data.join("\n").as_bytes())
-        .await
-        .map_err(|_| CError::WriteError(filepath.display().to_string()))?;
+    None
+}
+
+/// Write the copyright to the specified file
+pub(crate) fn write_copyright(
+    filepath: &Path,
+    copyright_line: &str,
+    line_idx: Option<usize>,
+) -> Result<(), Error> {
+    let mut content = String::new();
+    fs::File::open(filepath)
+        .and_then(|mut file| file.read_to_string(&mut content))
+        .map_err(|e| Error::Io("reading file", e))?;
+
+    let content = match line_idx {
+        Some(line_idx) => {
+            // Insert copyright where we found the outdated one
+            content
+                .split('\n')
+                .enumerate()
+                .flat_map(|(idx, line)| {
+                    if idx == line_idx {
+                        [copyright_line, "\n"]
+                    } else {
+                        [line, "\n"]
+                    }
+                })
+                .collect::<String>()
+        }
+        None => {
+            if !content.is_empty() && content.starts_with("#!") {
+                // Insert copyright on the second line for shell scripts
+                // that might have a shebang line
+                let mut content_iter = content.split('\n');
+                [content_iter.next().unwrap_or_default(), copyright_line]
+                    .into_iter()
+                    .chain(content_iter)
+                    .flat_map(|line| [line, "\n"])
+                    .collect::<String>()
+            } else {
+                // Insert copyright followed by a blank line on top
+                [copyright_line, "\n\n", &content]
+                    .iter()
+                    .copied()
+                    .collect::<String>()
+            }
+        }
+    };
+
+    fs::File::create(filepath)
+        .and_then(|mut file| file.write_all(content.as_bytes()))
+        .map_err(|e| Error::Io("writing file with copyright", e))?;
 
     Ok(())
 }

@@ -1,5 +1,5 @@
 
-FROM rust:alpine as builder_rust
+FROM rust:alpine AS builder_rust
 
 # Required in compiling some dependencies (at least proc-macro-error)
 RUN apk add build-base

@@ -1,65 +1,81 @@
-//! Extract added/modified times from git history.
-//!
+//! Git operations
 
-use crate::CError;
+use std::path::Path;
+use std::process::{self, Command};
+
 use chrono::Utc;
-use tokio::process::Command;
+use log::debug;
 
-pub async fn get_files_on_ref(repo_path: &str, ref_name: &str) -> Result<Vec<String>, CError> {
+use crate::error::Error;
+
+/// Check the repository for changes of tracked files
+pub fn check_for_changes(repo_path: &str, fail_on_changes: bool) -> Result<(), Error> {
+    let diff_files = get_diffs(repo_path)?;
+    if !diff_files.is_empty() {
+        println!("The following files have changed:");
+        for file in diff_files {
+            println!("- {file}");
+        }
+
+        if fail_on_changes {
+            return Err(Error::FilesChanged);
+        }
+    }
+
+    Ok(())
+}
+
+/// Get all tracked files on a `git` reference
+pub(crate) fn get_files_on_ref(repo_path: &str, ref_name: &str) -> Result<Vec<String>, Error> {
     let output = Command::new("git")
         .arg("ls-tree")
         .arg("-r")
         .arg(ref_name)
         .arg("--name-only")
         .current_dir(repo_path)
-        .output();
+        .output()
+        .map_err(|e| Error::Io("getting files on ref", e))?;
 
-    let output = output.await?;
-    if !output.status.success() {
-        return Err(CError::GitCmdError(
-            String::from_utf8(output.stderr).map_err(|e| e.utf8_error())?,
-        ));
-    }
-
-    Ok(parse_cmd_output(&output)?)
+    parse_cmd_output(output)
 }
 
-pub async fn get_added_mod_times_for_file(filepath: &str, cwd: &str) -> String {
+/// Get the added and modified times for a file in a git repository
+pub(crate) fn get_added_mod_times_for_file(filepath: &Path, repo_path: &str) -> String {
     let output = Command::new("git")
         .arg("log")
         .arg("--follow")
         .arg("-m")
         .arg("--pretty=%ci")
         .arg(filepath)
-        .current_dir(cwd)
-        .output();
-    let output = output.await.unwrap().stdout;
-    let commit_years: Vec<String> = std::str::from_utf8(&output)
-        .unwrap()
+        .current_dir(repo_path)
+        .output()
+        .expect("failed to run `git log`");
+    let commit_years: Vec<String> = str::from_utf8(&output.stdout)
+        .expect("failed to parse command output as utf8")
         .split('\n')
-        .filter_map(|s| {
-            // Take only first four chars (the year) from strings that are longer than zero
-            let s = s.to_owned();
-            match s.len() {
-                0 => None,
-                _ => Some(s.chars().take(4).collect()),
-            }
-        })
+        .filter(|s| !s.is_empty())
+        // Take only first four chars (the year)
+        .map(|s| s.chars().take(4).collect())
         .collect();
 
     match commit_years.len() {
         0 => {
-            log::debug!("File {} is untracked, add current year", filepath);
-            Utc::now().date().format("%Y").to_string()
+            debug!("File {} is untracked, add current year", filepath.display());
+            Utc::now().date_naive().format("%Y").to_string()
         }
         1 => {
-            log::debug!("File {} was only committed once", filepath);
+            debug!("File {} was only committed once", filepath.display());
             commit_years[0].clone()
         }
         num_commits => {
-            log::debug!("File {} was modified {} times", filepath, num_commits);
-            let added = commit_years[commit_years.len() - 1].clone();
-            let last_modified = commit_years[0].clone();
+            debug!(
+                "File {} was modified {num_commits} times",
+                filepath.display()
+            );
+            let mut years_iter = commit_years.into_iter();
+            let last_modified = years_iter.next().unwrap();
+            let added = years_iter.last().unwrap();
+
             match added == last_modified {
                 true => added,
                 false => format!("{}-{}", added, last_modified),
@@ -68,50 +84,31 @@ pub async fn get_added_mod_times_for_file(filepath: &str, cwd: &str) -> String {
     }
 }
 
-pub async fn check_for_changes(repo_path: &str, fail_on_diff: bool) -> Result<(), CError> {
-    let diff_files = get_diffs(repo_path).await?;
-    if diff_files.len() > 0 {
-        println!("Files changed:");
-        for filepath in diff_files.iter() {
-            println!("{}", filepath);
-        }
-
-        if fail_on_diff {
-            return Err(CError::FilesChanged);
-        }
-    }
-
-    Ok(())
-}
-
-async fn get_diffs<'a>(repo_path: &str) -> Result<Vec<String>, CError> {
+fn get_diffs(repo_path: &str) -> Result<Vec<String>, Error> {
     let output = Command::new("git")
         .arg("diff")
         .arg("--name-only")
         .current_dir(repo_path)
-        .output();
+        .output()
+        .map_err(|e| Error::Io("checking for diffs", e))?;
 
-    let output = output.await?;
+    parse_cmd_output(output)
+}
+
+fn parse_cmd_output(output: process::Output) -> Result<Vec<String>, Error> {
     if !output.status.success() {
-        return Err(CError::GitCmdError(
-            String::from_utf8(output.stderr).map_err(|e| e.utf8_error())?,
+        return Err(Error::GitCommand(
+            String::from_utf8_lossy(&output.stderr).to_string(),
         ));
     }
 
-    Ok(parse_cmd_output(&output)?)
-}
-
-fn parse_cmd_output(output: &std::process::Output) -> Result<Vec<String>, CError> {
-    let output = std::str::from_utf8(&output.stdout)?;
-    let lines: Vec<String> = output
-        .split('\n')
-        .filter_map(|s| {
-            let s = s.to_owned();
-            match s.len() {
-                0 => None,
-                _ => Some(s),
-            }
+    str::from_utf8(&output.stdout)
+        .map(|output| {
+            output
+                .split('\n')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_owned())
+                .collect()
         })
-        .collect();
-    Ok(lines)
+        .map_err(Into::into)
 }

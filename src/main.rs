@@ -1,56 +1,43 @@
-//! Add/update copyright notes according to history.
+//! Add/update copyright notes according to the git history
 
-use anyhow::{Context, Result};
-use clap::Parser;
-use env_logger::TimestampPrecision;
-use git_copyright::{check_repo_copyright, Config};
 use std::time::Instant;
 
-#[derive(Parser, Debug)]
-#[clap(author, version, about)]
-struct Args {
-    /// Path to repository to check
-    #[clap(short, long, default_value = "./")]
-    repo: String,
+use env_logger::TimestampPrecision;
+use git_copyright::Config;
+use git_copyright::cli::Args;
+use git_copyright::error::Error;
+use git_copyright::git_ops::check_for_changes;
+use git_copyright::runner::check_repo_copyright;
+use log::info;
 
-    /// Name in copyright
-    #[clap(short, long)]
-    name: String,
-
-    /// YAML file with config to use
-    #[clap(short, long, default_value = "")]
-    config: String,
-
-    /// Do not fail even if tracked files changed
-    #[clap(short, long)]
-    ignore_changes: bool,
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let args = Args::parse();
+fn main() -> Result<(), Error> {
+    let args: Args = argh::from_env();
 
     env_logger::builder()
         .format_timestamp(Some(TimestampPrecision::Millis))
         .init();
 
-    match args.config.as_str() {
-        "" => {
-            log::info!("Using default configuration");
-            Config::default().assign();
+    let config = match args.config_path {
+        None => {
+            info!("Using default configuration");
+            Config::default()
         }
-        cfg_file => {
-            log::info!("Using config {}", cfg_file);
-            Config::from_file(cfg_file)
-                .context(format!("Unable to get config from file {}", cfg_file))?
-                .assign();
+        Some(cfg_path) => {
+            info!("Using config {}", cfg_path);
+            Config::from_file(&cfg_path)?
         }
-    }
+    };
 
     let start = Instant::now();
-    check_repo_copyright(&args.repo, &args.name, !args.ignore_changes).await?;
-    let duration_s = start.elapsed().as_millis() as f32 / 1000.0;
-    println!("Copyrights checked and updated in {:0.3}s", duration_s);
+    let result = check_repo_copyright(config, &args.repo_path, &args.copyright_template);
+    let duration = start.elapsed().as_millis() as f32 / 1000.;
+    if let Err(e) = result {
+        eprintln!("Failed to check repo copyright ({duration:0.3}s): {e}",);
+    } else {
+        println!("Copyrights checked and updated in {duration:0.3}s",);
+    }
+
+    check_for_changes(&args.repo_path, args.fail_on_changes)?;
 
     Ok(())
 }
