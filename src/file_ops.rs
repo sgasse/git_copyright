@@ -53,7 +53,18 @@ pub(crate) fn write_copyright(
         .and_then(|mut file| file.read_to_string(&mut content))
         .map_err(|e| Error::Io("reading file", e))?;
 
-    let content = match line_idx {
+    // Create content with copyright added/updated
+    let content = updated_content(&content, copyright_line, line_idx);
+
+    fs::File::create(filepath)
+        .and_then(|mut file| file.write_all(content.as_bytes()))
+        .map_err(|e| Error::Io("writing file with copyright", e))?;
+
+    Ok(())
+}
+
+fn updated_content(content: &str, copyright_line: &str, line_idx: Option<usize>) -> String {
+    match line_idx {
         Some(line_idx) => {
             // Insert copyright where we found the outdated one
             content
@@ -61,9 +72,15 @@ pub(crate) fn write_copyright(
                 .enumerate()
                 .flat_map(|(idx, line)| {
                     if idx == line_idx {
-                        [copyright_line, "\n"]
+                        if idx == 0 {
+                            ["", copyright_line]
+                        } else {
+                            ["\n", copyright_line]
+                        }
+                    } else if idx == 0 {
+                        ["", line]
                     } else {
-                        [line, "\n"]
+                        ["\n", line]
                     }
                 })
                 .collect::<String>()
@@ -73,24 +90,103 @@ pub(crate) fn write_copyright(
                 // Insert copyright on the second line for shell scripts
                 // that might have a shebang line
                 let mut content_iter = content.split('\n');
-                [content_iter.next().unwrap_or_default(), copyright_line]
-                    .into_iter()
-                    .chain(content_iter)
-                    .flat_map(|line| [line, "\n"])
-                    .collect::<String>()
+                [
+                    content_iter.next().unwrap_or_default(),
+                    "\n",
+                    copyright_line,
+                ]
+                .into_iter()
+                .chain(content_iter.flat_map(|line| ["\n", line]))
+                .collect::<String>()
             } else {
                 // Insert copyright followed by a blank line on top
-                [copyright_line, "\n\n", &content]
+                [copyright_line, "\n\n", content]
                     .iter()
                     .copied()
                     .collect::<String>()
             }
         }
-    };
+    }
+}
 
-    fs::File::create(filepath)
-        .and_then(|mut file| file.write_all(content.as_bytes()))
-        .map_err(|e| Error::Io("writing file with copyright", e))?;
+#[cfg(test)]
+mod test {
+    use super::*;
 
-    Ok(())
+    #[test]
+    fn add_new_copyright() {
+        let original_content = r#"use std::path::Path;
+
+fn main() {}
+"#;
+        let expected_content = r#"// Copyright 2026
+
+use std::path::Path;
+
+fn main() {}
+"#;
+
+        let copyright_line = "// Copyright 2026";
+        let with_copyright = updated_content(original_content, copyright_line, None);
+
+        assert_eq!(expected_content, with_copyright);
+    }
+
+    #[test]
+    fn add_new_copyright_shebang() {
+        let original_content = r#"#!/bin/bash
+
+echo "Hello"
+"#;
+        let expected_content = r#"#!/bin/bash
+# Copyright 2026
+
+echo "Hello"
+"#;
+
+        let copyright_line = "# Copyright 2026";
+        let with_copyright = updated_content(original_content, copyright_line, None);
+
+        assert_eq!(expected_content, with_copyright);
+    }
+
+    #[test]
+    fn update_existing_copyright() {
+        let original_content = r#"// Copyright 2025
+
+use std::path::Path;
+
+fn main() {}
+"#;
+        let expected_content = r#"// Copyright 2026
+
+use std::path::Path;
+
+fn main() {}
+"#;
+
+        let copyright_line = "// Copyright 2026";
+        let with_copyright = updated_content(original_content, copyright_line, Some(0));
+
+        assert_eq!(expected_content, with_copyright);
+    }
+
+    #[test]
+    fn update_copyright_shebang() {
+        let original_content = r#"#!/bin/bash
+# Copyright 2025
+
+echo "Hello"
+"#;
+        let expected_content = r#"#!/bin/bash
+# Copyright 2026
+
+echo "Hello"
+"#;
+
+        let copyright_line = "# Copyright 2026";
+        let with_copyright = updated_content(original_content, copyright_line, Some(1));
+
+        assert_eq!(expected_content, with_copyright);
+    }
 }
