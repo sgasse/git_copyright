@@ -25,8 +25,8 @@ pub(crate) fn generate_copyright_line(
     let copyright = template.replace(r"{years}", years);
 
     match comment_sign {
-        CommentSign::LeftOnly(left) => [left, " ", &copyright].join(" "),
-        CommentSign::Enclosing(left, right) => [left, " ", &copyright, " ", right].join(" "),
+        CommentSign::LeftOnly(left) => [left, " ", &copyright].join(""),
+        CommentSign::Enclosing(left, right) => [left, " ", &copyright, " ", right].join(""),
     }
 }
 
@@ -153,5 +153,19 @@ mod test {
         for example in invalid_copyrights {
             assert!(!copyright_re.is_match(example));
         }
+    }
+
+    #[test]
+    fn generated_copyright_regex_matches() {
+        let template = r"Copyright {years} YourCorp Ltd. All rights reserved.";
+        let comment_sign = CommentSign::LeftOnly("//".into());
+
+        let regex = generate_copyright_regex(template, &comment_sign);
+
+        let example_single_year = r"// Copyright 2025 YourCorp Ltd. All rights reserved.";
+        let example_year_range = r"// Copyright 2025-2026 YourCorp Ltd. All rights reserved.";
+
+        assert!(regex.is_match(example_single_year));
+        assert!(regex.is_match(example_year_range))
     }
 }

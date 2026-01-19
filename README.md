@@ -32,5 +32,5 @@ git_copyright --copyright-template "Copyright {years} YourCorp. All rights reser
 You can also use a pre-built image:
 
 ```bash
-docker run --rm -u $(id -u) -v $(pwd):/mnt sgasse/git_copyright:0.3.0 --copyright-template "Copyright {years} YourCorp. All rights reserved."
+docker run --rm -u $(id -u) -v $(pwd):/mnt sgasse/git_copyright:0.3.1 --copyright-template "Copyright {years} YourCorp. All rights reserved."
 ```

@@ -2,10 +2,22 @@
 # You can pass a custom config with the argument `--config-path`.
 
 # glob patterns of files to ignore
-ignore_files = ["*.gz", "*.txt"]
+ignore_files = [
+    "*.gz",
+    "*.txt",
+    "*.drawio",
+    "*.jpg",
+    "*.json",
+    "*.json",
+    "*.md",
+    "*.pdf",
+    "*.png",
+    "*.sql",
+    "*Cargo.lock",
+]
 
 # glob patterns of directories to ignore
-ignore_dirs = [".git", ".idea", "*__pycache__*", "**/node_modules"]
+ignore_dirs = ["*.git", "*.idea", "*__pycache__*", "**/node_modules"]
 
 # Mapping from file extensions / filenames without extension to comment signs.
 # A single string specifies leading comment sign(s) while an array of two
@@ -13,10 +25,14 @@ ignore_dirs = [".git", ".idea", "*__pycache__*", "**/node_modules"]
 [comment_sign_map]
 ".env" = "#"
 ".gitignore" = "#"
+c = "//"
 conf = "#"
+cpp = "//"
 css = ["/*", "*/"]
 Dockerfile = "#"
+h = "//"
 hcl = "#"
+hpp = "//"
 in = "#"
 js = "//"
 proto = "//"

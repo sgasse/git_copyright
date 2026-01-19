@@ -18,6 +18,7 @@ pub(crate) fn filter_files(
     files
         .into_iter()
         .filter(|filepath| !glob_patterns.iter().any(|p| p.matches(filepath)))
+        .filter(|filepath| Path::new(filepath).is_file())
 }
 
 /// Read the copyright years from an existing file
